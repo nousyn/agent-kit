@@ -1,127 +1,317 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { hooks } from '../src/hook-registry.js';
-import { ClaudeCodeTranslator } from '../src/hook-translators/claude-code.js';
-import { OpenCodeTranslator } from '../src/hook-translators/opencode.js';
-import { OpenClawTranslator } from '../src/hook-translators/openclaw.js';
-import type { RawHookRegistration, ExtendHookRegistration } from '../src/hook-types.js';
-import { getIntents, getRawHooks, getExtendHooks } from '../src/hook-registry.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { installHooks, uninstallHooks, hasHooksInstalled } from '../src/hooks.js';
+import { defineHooks } from '../src/define-hooks.js';
 
-const emptyRaw = new Map<string, RawHookRegistration>();
-const emptyExtend = new Map<string, readonly ExtendHookRegistration[]>();
+// Use a temp directory for all tests
+let tmpDir: string;
 
-describe('hooks — 翻译器集成 (迁移自旧 buildHookFiles 测试)', () => {
-    beforeEach(() => {
-        hooks._resetForTesting();
-    });
+beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-kit-test-'));
+    // Mock os.homedir to use temp dir
+    vi.spyOn(os, 'homedir').mockReturnValue(tmpDir);
+});
 
-    describe('claude-code / codex — shell 脚本', () => {
-        it('inject 生成 shell 脚本', () => {
-            const translator = new ClaudeCodeTranslator('claude-code');
-            hooks.inject({ perTurn: '<test-reminder>Check something after each turn.</test-reminder>' });
+afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+});
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files).toHaveProperty('test-tool-inject.sh');
-
-            const script = result.files['test-tool-inject.sh'];
-            expect(script).toContain('#!/bin/bash');
-            expect(script).toContain('<test-reminder>Check something after each turn.</test-reminder>');
-        });
-
-        it('codex 生成相同格式', () => {
-            const translator = new ClaudeCodeTranslator('codex');
-            hooks.inject({ perTurn: 'codex test' });
-
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files).toHaveProperty('test-tool-inject.sh');
-        });
-    });
-
-    describe('openclaw — HOOK.md + handler.ts', () => {
-        it('inject 生成 HOOK.md 和 handler.ts', () => {
-            const translator = new OpenClawTranslator();
-            hooks.inject({
-                perTurn: '<test-reminder>Check something after each turn.</test-reminder>',
-                sessionStart: '<test-start>Load context at session start.</test-start>',
+describe('installHooks', () => {
+    describe('claude-code', () => {
+        it('写入 shell 脚本', async () => {
+            const hooks = defineHooks('claude-code', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "pre tool use"',
             });
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(Object.keys(result.files).sort()).toEqual(['HOOK.md', 'handler.ts']);
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(1);
+
+            const filePath = result.filesWritten[0];
+            expect(filePath).toContain('test-tool-PreToolUse.sh');
+
+            const content = await fs.readFile(filePath, 'utf-8');
+            expect(content).toBe('#!/bin/bash\necho "pre tool use"');
         });
 
-        it('HOOK.md 包含工具名', () => {
-            const translator = new OpenClawTranslator();
-            hooks.inject({ perTurn: 'test' });
-
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files['HOOK.md']).toContain('name: test-tool');
-        });
-
-        it('handler.ts 包含 sessionStart 和 perTurn', () => {
-            const translator = new OpenClawTranslator();
-            hooks.inject({
-                perTurn: '<test-reminder>Check something after each turn.</test-reminder>',
-                sessionStart: '<test-start>Load context at session start.</test-start>',
+        it('多事件共享内容生成多个脚本', async () => {
+            const hooks = defineHooks('claude-code', {
+                events: ['PreToolUse', 'PostToolUse'],
+                content: '#!/bin/bash\necho "hook"',
             });
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            const handler = result.files['handler.ts'];
-            expect(handler).toContain('<test-start>Load context at session start.</test-start>');
-            expect(handler).toContain('<test-reminder>Check something after each turn.</test-reminder>');
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(2);
+
+            const fileNames = result.filesWritten.map((f) => path.basename(f));
+            expect(fileNames).toContain('test-tool-PreToolUse.sh');
+            expect(fileNames).toContain('test-tool-PostToolUse.sh');
         });
 
-        it('handler.ts 注入的虚拟文件名基于工具名', () => {
-            const translator = new OpenClawTranslator();
-            hooks.inject({ perTurn: 'test' });
+        it('多条定义生成各自脚本', async () => {
+            const hooks = defineHooks('claude-code', [
+                { events: ['PreToolUse'], content: '#!/bin/bash\necho "pre"' },
+                { events: ['PostToolUse'], content: '#!/bin/bash\necho "post"' },
+            ]);
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files['handler.ts']).toContain('TEST_TOOL_REMINDER.md');
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(2);
+        });
+
+        it('shell 脚本有执行权限', async () => {
+            const hooks = defineHooks('claude-code', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "test"',
+            });
+
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            const stat = await fs.stat(result.filesWritten[0]);
+            // Check executable bit
+            expect(stat.mode & 0o111).toBeGreaterThan(0);
+        });
+
+        it('写入 settings.json', async () => {
+            const hooks = defineHooks('claude-code', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "test"',
+            });
+
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            expect(result.settingsUpdated).toBe(true);
+
+            const settingsPath = path.join(tmpDir, '.claude', 'settings.json');
+            const settings = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+            expect(settings.hooks).toBeDefined();
+            expect(settings.hooks.PreToolUse).toBeDefined();
+            expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain('test-tool');
         });
     });
 
-    describe('opencode — TypeScript plugin', () => {
-        it('inject 生成 plugin 文件', () => {
-            const translator = new OpenCodeTranslator();
-            hooks.inject({ perTurn: 'Check something.' });
-
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(Object.keys(result.files)).toEqual(['test-tool-plugin.ts']);
-        });
-
-        it('导出名为 PascalCase + Plugin', () => {
-            const translator = new OpenCodeTranslator();
-            hooks.inject({ perTurn: 'test' });
-
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files['test-tool-plugin.ts']).toContain('export const TestToolPlugin');
-        });
-
-        it('包含 messages.transform 钩子', () => {
-            const translator = new OpenCodeTranslator();
-            hooks.inject({ perTurn: 'test' });
-
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files['test-tool-plugin.ts']).toContain('experimental.chat.messages.transform');
-        });
-
-        it('有 compaction 时包含 compacting 钩子', () => {
-            const translator = new OpenCodeTranslator();
-            hooks.inject({
-                perTurn: 'per-turn',
-                compaction: '<test-compact>Save before compaction.</test-compact>',
+    describe('codex', () => {
+        it('与 claude-code 格式相同', async () => {
+            const hooks = defineHooks('codex', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "codex"',
             });
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            const plugin = result.files['test-tool-plugin.ts'];
-            expect(plugin).toContain('experimental.session.compacting');
-            expect(plugin).toContain('<test-compact>Save before compaction.</test-compact>');
+            const result = await installHooks('test-tool', 'codex', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten[0]).toContain('test-tool-PreToolUse.sh');
+        });
+    });
+
+    describe('opencode', () => {
+        it('写入 TypeScript 插件文件', async () => {
+            const hooks = defineHooks('opencode', {
+                events: ['experimental.chat.messages.transform'],
+                content: 'export default { name: "test" }',
+            });
+
+            const result = await installHooks('test-tool', 'opencode', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(1);
+
+            const fileName = path.basename(result.filesWritten[0]);
+            expect(fileName).toBe('test-tool-experimental-chat-messages-transform-plugin.ts');
         });
 
-        it('无 compaction 时不包含 compacting 钩子', () => {
-            const translator = new OpenCodeTranslator();
-            hooks.inject({ perTurn: 'check something' });
+        it('内容原样写入', async () => {
+            const pluginCode = `
+import type { Plugin } from 'opencode';
+export default {
+    name: 'test',
+    hooks: {
+        'experimental.chat.messages.transform': async (msgs) => msgs,
+    },
+};`;
+            const hooks = defineHooks('opencode', {
+                events: ['experimental.chat.messages.transform'],
+                content: pluginCode,
+            });
 
-            const result = translator.translate(getIntents(), emptyRaw, emptyExtend, 'test-tool');
-            expect(result.files['test-tool-plugin.ts']).not.toContain('experimental.session.compacting');
+            const result = await installHooks('test-tool', 'opencode', hooks);
+            const written = await fs.readFile(result.filesWritten[0], 'utf-8');
+            expect(written).toBe(pluginCode);
         });
+    });
+
+    describe('openclaw', () => {
+        it('生成 HOOK.md 和 handler.ts', async () => {
+            const hooks = defineHooks('openclaw', {
+                events: ['session_start', 'before_tool_call'],
+                content: 'export default async function(event) { return event; }',
+                description: '测试钩子',
+            });
+
+            const result = await installHooks('test-tool', 'openclaw', hooks);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(2);
+
+            const fileNames = result.filesWritten.map((f) => path.basename(f));
+            expect(fileNames).toContain('HOOK.md');
+            expect(fileNames).toContain('handler.ts');
+        });
+
+        it('HOOK.md 包含正确的 YAML frontmatter', async () => {
+            const hooks = defineHooks('openclaw', {
+                events: ['session_start', 'before_tool_call'],
+                content: 'export default async function() {}',
+                description: '注入项目规范',
+            });
+
+            const result = await installHooks('test-tool', 'openclaw', hooks);
+            const hookMdPath = result.filesWritten.find((f) => f.endsWith('HOOK.md'))!;
+            const content = await fs.readFile(hookMdPath, 'utf-8');
+
+            expect(content).toContain('name: test-tool');
+            expect(content).toContain('description: 注入项目规范');
+            expect(content).toContain('  - session_start');
+            expect(content).toContain('  - before_tool_call');
+        });
+
+        it('HOOK.md 无 description 时用默认值', async () => {
+            const hooks = defineHooks('openclaw', {
+                events: ['session_start'],
+                content: 'export default async function() {}',
+            });
+
+            const result = await installHooks('test-tool', 'openclaw', hooks);
+            const hookMdPath = result.filesWritten.find((f) => f.endsWith('HOOK.md'))!;
+            const content = await fs.readFile(hookMdPath, 'utf-8');
+
+            expect(content).toContain('description: Hook installed by test-tool');
+        });
+
+        it('handler.ts 内容原样写入', async () => {
+            const handlerCode = 'export default async function(event) { return event; }';
+            const hooks = defineHooks('openclaw', {
+                events: ['session_start'],
+                content: handlerCode,
+            });
+
+            const result = await installHooks('test-tool', 'openclaw', hooks);
+            const handlerPath = result.filesWritten.find((f) => f.endsWith('handler.ts'))!;
+            const content = await fs.readFile(handlerPath, 'utf-8');
+
+            expect(content).toBe(handlerCode);
+        });
+    });
+
+    describe('agent 不匹配', () => {
+        it('传入不匹配的 HookSet 返回错误', async () => {
+            const hooks = defineHooks('opencode', {
+                events: ['experimental.chat.messages.transform'],
+                content: 'test',
+            });
+
+            const result = await installHooks('test-tool', 'claude-code', hooks);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain('No hook definitions found');
+        });
+    });
+
+    describe('多个 HookSet', () => {
+        it('接受多个 HookSet 数组', async () => {
+            const set1 = defineHooks('claude-code', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "set1"',
+            });
+            const set2 = defineHooks('claude-code', {
+                events: ['PostToolUse'],
+                content: '#!/bin/bash\necho "set2"',
+            });
+
+            const result = await installHooks('test-tool', 'claude-code', [set1, set2]);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(2);
+        });
+
+        it('过滤不匹配的 HookSet', async () => {
+            const claudeHooks = defineHooks('claude-code', {
+                events: ['PreToolUse'],
+                content: '#!/bin/bash\necho "claude"',
+            });
+            const openCodeHooks = defineHooks('opencode', {
+                events: ['experimental.chat.messages.transform'],
+                content: 'test',
+            });
+
+            const result = await installHooks('test-tool', 'claude-code', [claudeHooks, openCodeHooks]);
+            expect(result.success).toBe(true);
+            expect(result.filesWritten).toHaveLength(1);
+        });
+    });
+});
+
+describe('uninstallHooks', () => {
+    it('删除已安装的文件', async () => {
+        const hooks = defineHooks('claude-code', {
+            events: ['PreToolUse'],
+            content: '#!/bin/bash\necho "test"',
+        });
+
+        await installHooks('test-tool', 'claude-code', hooks);
+
+        const result = await uninstallHooks('test-tool', 'claude-code');
+        expect(result.success).toBe(true);
+        expect(result.removed).toHaveLength(1);
+    });
+
+    it('目录不存在时也成功', async () => {
+        const result = await uninstallHooks('nonexistent', 'claude-code');
+        expect(result.success).toBe(true);
+        expect(result.removed).toHaveLength(0);
+    });
+
+    it('清理 settings.json', async () => {
+        const hooks = defineHooks('claude-code', {
+            events: ['PreToolUse'],
+            content: '#!/bin/bash\necho "test"',
+        });
+
+        await installHooks('test-tool', 'claude-code', hooks);
+        await uninstallHooks('test-tool', 'claude-code');
+
+        const settingsPath = path.join(tmpDir, '.claude', 'settings.json');
+        try {
+            const settings = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+            // hooks key should be removed or event should be empty
+            expect(settings.hooks).toBeUndefined();
+        } catch {
+            // Settings file removed entirely is also valid
+        }
+    });
+});
+
+describe('hasHooksInstalled', () => {
+    it('未安装时返回 false', async () => {
+        expect(await hasHooksInstalled('test-tool', 'claude-code')).toBe(false);
+    });
+
+    it('安装后返回 true', async () => {
+        const hooks = defineHooks('claude-code', {
+            events: ['PreToolUse'],
+            content: '#!/bin/bash\necho "test"',
+        });
+
+        await installHooks('test-tool', 'claude-code', hooks);
+        expect(await hasHooksInstalled('test-tool', 'claude-code')).toBe(true);
+    });
+
+    it('卸载后返回 false', async () => {
+        const hooks = defineHooks('claude-code', {
+            events: ['PreToolUse'],
+            content: '#!/bin/bash\necho "test"',
+        });
+
+        await installHooks('test-tool', 'claude-code', hooks);
+        await uninstallHooks('test-tool', 'claude-code');
+        expect(await hasHooksInstalled('test-tool', 'claude-code')).toBe(false);
     });
 });

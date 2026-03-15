@@ -4,48 +4,31 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AGENT_REGISTRY } from './types.js';
-import type { AgentType, HookInstallResult } from './types.js';
-import type { IntentType, RawHookRegistration } from './hook-types.js';
-import { getIntents, getRawHooks, getExtendHooks } from './hook-registry.js';
-import { checkAllDegradation } from './hook-capabilities.js';
-import { ClaudeCodeTranslator } from './hook-translators/claude-code.js';
-import { OpenCodeTranslator } from './hook-translators/opencode.js';
-import { OpenClawTranslator } from './hook-translators/openclaw.js';
-import type { AgentHookTranslator } from './hook-translators/types.js';
+import type { AgentType, HookDefinition, HookInstallResult, HookSet } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
-// Translator factory
-// ---------------------------------------------------------------------------
-
-function getTranslator(agent: AgentType): AgentHookTranslator {
-    switch (agent) {
-        case 'claude-code':
-            return new ClaudeCodeTranslator('claude-code');
-        case 'codex':
-            return new ClaudeCodeTranslator('codex');
-        case 'opencode':
-            return new OpenCodeTranslator();
-        case 'openclaw':
-            return new OpenClawTranslator();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// installHooks — main entry point
+// installHooks — write hook files to disk
 // ---------------------------------------------------------------------------
 
 /**
  * Install hooks for the given agent type.
  *
- * Reads all registered intents, raw hooks, and extend hooks from the hook
- * registry. Translates them into native hook files using the agent-specific
- * translator. Runs degradation checks and conflict detection.
+ * Accepts one or more HookSet (from defineHooks()). Filters to only those
+ * matching the target agent. Writes content to the agent's hook directory.
+ *
+ * For Claude Code / Codex: writes shell scripts, merges into settings.json.
+ * For OpenCode: writes TypeScript plugin files directly to plugins dir.
+ * For OpenClaw: writes HOOK.md + handler.ts, attempts CLI activation.
  *
  * @internal — called by the Kit object returned from createKit().
  */
-export async function installHooks(name: string, agent: AgentType): Promise<HookInstallResult> {
+export async function installHooks(
+    name: string,
+    agent: AgentType,
+    hookSets: HookSet | HookSet[],
+): Promise<HookInstallResult> {
     const home = os.homedir();
     const entry = AGENT_REGISTRY[agent];
     const hookDir = entry.getHookDir(home, name);
@@ -57,65 +40,49 @@ export async function installHooks(name: string, agent: AgentType): Promise<Hook
         settingsUpdated: false,
         notes: [],
         warnings: [],
-        skipped: [],
     };
 
-    const intents = getIntents();
-    const rawHooks = getRawHooks();
-    const extendHooks = getExtendHooks();
+    // Normalize and filter to matching agent
+    const sets = (Array.isArray(hookSets) ? hookSets : [hookSets]).filter((s) => s.agent === agent);
 
-    // Check if there's anything to install
-    if (intents.length === 0 && rawHooks.size === 0 && extendHooks.size === 0) {
-        result.error =
-            'No hooks registered. Use hooks.inject(), hooks.beforeToolCall(), etc. to declare hook behavior.';
+    if (sets.length === 0) {
+        result.error = `No hook definitions found for agent "${agent}".`;
         return result;
     }
 
+    // Collect all definitions from matching sets
+    const allDefs: HookDefinition[] = [];
+    for (const set of sets) {
+        allDefs.push(...set.definitions);
+    }
+
     try {
-        // Step 1: Run degradation checks
-        const intentTypes = [...new Set(intents.map((i) => i.type))] as IntentType[];
-        const degradations = checkAllDegradation(agent, intentTypes);
-        for (const d of degradations) {
-            if (d.level === 'unsupported') {
-                result.warnings.push(d.message);
-            } else if (d.level === 'partial') {
-                result.warnings.push(d.message);
-            }
+        // Generate files based on agent type
+        const files: Record<string, string> = {};
+
+        switch (agent) {
+            case 'claude-code':
+            case 'codex':
+                generateClaudeCodeFiles(files, allDefs, name);
+                break;
+            case 'opencode':
+                generateOpenCodeFiles(files, allDefs, name);
+                break;
+            case 'openclaw':
+                generateOpenClawFiles(files, allDefs, name);
+                break;
         }
 
-        // Step 2: Filter raw/extend hooks for this agent
-        const agentRawHooks = new Map<string, RawHookRegistration>();
-        for (const [key, reg] of rawHooks) {
-            if (key.startsWith(`${agent}::`)) {
-                agentRawHooks.set(key, reg);
-            }
-        }
-
-        const agentExtendHooks = new Map<string, readonly import('./hook-types.js').ExtendHookRegistration[]>();
-        for (const [key, regs] of extendHooks) {
-            if (key.startsWith(`${agent}::`)) {
-                agentExtendHooks.set(key, regs);
-            }
-        }
-
-        // Step 3: Translate intents → native files
-        const translator = getTranslator(agent);
-        const translation = translator.translate(intents, agentRawHooks, agentExtendHooks, name);
-
-        // Merge translation warnings and skipped
-        result.warnings.push(...translation.warnings);
-        result.skipped.push(...translation.skipped);
-
-        // Step 4: Write hook files
-        if (Object.keys(translation.files).length === 0) {
-            result.notes.push('No hook files generated for this agent.');
+        if (Object.keys(files).length === 0) {
+            result.notes.push('No hook files generated.');
             result.success = true;
             return result;
         }
 
+        // Write files
         await fs.mkdir(hookDir, { recursive: true });
 
-        for (const [fileName, content] of Object.entries(translation.files)) {
+        for (const [fileName, content] of Object.entries(files)) {
             const filePath = path.join(hookDir, fileName);
             await fs.writeFile(filePath, content, 'utf-8');
 
@@ -126,18 +93,18 @@ export async function installHooks(name: string, agent: AgentType): Promise<Hook
             result.filesWritten.push(filePath);
         }
 
-        // Step 5: Merge settings.json for agents that need it (Claude Code / Codex)
+        // Merge settings.json for Claude Code / Codex
         if (entry.getSettingsPath) {
             const settingsPath = entry.getSettingsPath(home);
-            const shellFiles = Object.keys(translation.files).filter((f) => f.endsWith('.sh'));
+            const shellFiles = Object.keys(files).filter((f) => f.endsWith('.sh'));
 
             if (shellFiles.length > 0) {
-                await mergeHookSettings(settingsPath, hookDir, shellFiles, name);
+                await mergeHookSettings(settingsPath, hookDir, shellFiles, allDefs, name);
                 result.settingsUpdated = true;
             }
         }
 
-        // Step 6: Agent-specific post-install
+        // OpenClaw post-install: attempt CLI activation
         if (agent === 'openclaw') {
             try {
                 await execFileAsync('openclaw', ['hooks', 'enable', name]);
@@ -178,7 +145,7 @@ export async function uninstallHooks(
     const removed: string[] = [];
 
     try {
-        // Remove hook directory
+        // Remove hook directory contents
         try {
             const files = await fs.readdir(hookDir);
             for (const file of files) {
@@ -235,17 +202,81 @@ export async function hasHooksInstalled(name: string, agent: AgentType): Promise
 }
 
 // ---------------------------------------------------------------------------
+// File generators — per agent
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude Code / Codex: each definition × each event → one shell script.
+ * Filename: `{toolName}-{event}.sh`
+ */
+function generateClaudeCodeFiles(files: Record<string, string>, defs: HookDefinition[], toolName: string): void {
+    for (const def of defs) {
+        for (const event of def.events) {
+            const fileName = `${toolName}-${event}.sh`;
+            // If multiple definitions target the same event, later ones win
+            files[fileName] = def.content;
+        }
+    }
+}
+
+/**
+ * OpenCode: each definition × each event → one TypeScript plugin file.
+ * Filename: `{toolName}-{event}-plugin.ts`
+ *
+ * OpenCode plugins dir is flat (all in ~/.config/opencode/plugins/).
+ * Content is written as-is — users provide the full plugin file content.
+ */
+function generateOpenCodeFiles(files: Record<string, string>, defs: HookDefinition[], toolName: string): void {
+    for (const def of defs) {
+        for (const event of def.events) {
+            // Sanitize event name for filename (dots → dashes)
+            const sanitized = event.replace(/\./g, '-');
+            const fileName = `${toolName}-${sanitized}-plugin.ts`;
+            files[fileName] = def.content;
+        }
+    }
+}
+
+/**
+ * OpenClaw: generates HOOK.md (YAML frontmatter) + handler.ts.
+ * Only uses the first definition (OpenClaw = one hook = one HOOK.md + handler.ts).
+ */
+function generateOpenClawFiles(files: Record<string, string>, defs: HookDefinition[], toolName: string): void {
+    if (defs.length === 0) return;
+
+    const def = defs[0]; // Only first definition used
+
+    // Generate HOOK.md
+    const description = def.description || `Hook installed by ${toolName}`;
+    const eventsYaml = def.events.map((e) => `  - ${e}`).join('\n');
+
+    files['HOOK.md'] = [
+        '---',
+        `name: ${toolName}`,
+        `description: ${description}`,
+        'events:',
+        eventsYaml,
+        '---',
+        '',
+    ].join('\n');
+
+    // handler.ts — user-provided content
+    files['handler.ts'] = def.content;
+}
+
+// ---------------------------------------------------------------------------
 // Settings merge (Claude Code / Codex)
 // ---------------------------------------------------------------------------
 
 /**
  * Merge hook entries into settings.json for Claude Code / Codex.
- * Maps each shell script to its corresponding native hook event based on filename conventions.
+ * Maps each shell script filename to its hook event via the definitions.
  */
 async function mergeHookSettings(
     settingsPath: string,
     hookDir: string,
     shellFiles: string[],
+    defs: HookDefinition[],
     toolName: string,
 ): Promise<void> {
     let settings: Record<string, unknown> = {};
@@ -261,41 +292,20 @@ async function mergeHookSettings(
     }
     const hooks = settings.hooks as Record<string, unknown[]>;
 
-    // Map filename patterns to native hook events
-    const fileToEvent: Record<string, string> = {
-        inject: 'UserPromptSubmit',
-        'session-start': 'SessionStart',
-        'session-end': 'SessionEnd',
-        compaction: 'PreCompact',
-        'before-tool': 'PreToolUse',
-        'after-tool': 'PostToolUse',
-        'on-session-start': 'SessionStart',
-        'on-session-end': 'SessionEnd',
-        permission: 'PermissionRequest',
-    };
+    // Build filename → event map from definitions
+    const fileToEvent = new Map<string, string>();
+    for (const def of defs) {
+        for (const event of def.events) {
+            const fileName = `${toolName}-${event}.sh`;
+            fileToEvent.set(fileName, event as string);
+        }
+    }
 
     for (const fileName of shellFiles) {
-        const activatorPath = path.join(hookDir, fileName);
-
-        // Determine the event from filename
-        let event: string | undefined;
-
-        // Check raw hooks first (pattern: toolName-raw-hookname.sh)
-        const rawMatch = fileName.match(/^.+-raw-(.+)\.sh$/);
-        if (rawMatch) {
-            // Raw hooks use the hook name directly (case-insensitive lookup)
-            event = rawMatch[1].charAt(0).toUpperCase() + rawMatch[1].slice(1);
-        } else {
-            // Intent-generated hooks use filename conventions
-            for (const [pattern, hookEvent] of Object.entries(fileToEvent)) {
-                if (fileName.includes(pattern)) {
-                    event = hookEvent;
-                    break;
-                }
-            }
-        }
-
+        const event = fileToEvent.get(fileName);
         if (!event) continue;
+
+        const activatorPath = path.join(hookDir, fileName);
 
         const hookEntry = {
             matcher: '',

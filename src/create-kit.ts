@@ -1,4 +1,4 @@
-import type { AgentType, Kit, KitOptions, ResolvedKitConfig, ScopeOptions } from './types.js';
+import type { AgentType, Kit, KitOptions, ResolvedKitConfig, ScopeOptions, HookSet } from './types.js';
 import { injectPrompt, hasPromptInjected } from './prompt.js';
 import { installHooks, uninstallHooks, hasHooksInstalled } from './hooks.js';
 import { getDataDir } from './platform.js';
@@ -44,8 +44,8 @@ export function createKit(name: string, options?: KitOptions): Kit {
             return hasPromptInjected(name, agent, scopeOptions);
         },
 
-        installHooks(agent: AgentType) {
-            return installHooks(name, agent);
+        installHooks(agent: AgentType, hooks: HookSet | HookSet[]) {
+            return installHooks(name, agent, hooks);
         },
 
         uninstallHooks(agent: AgentType) {

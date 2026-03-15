@@ -51,8 +51,8 @@ export interface Kit {
     /** Check if prompt has been injected. */
     hasPromptInjected(agent: AgentType, options?: ScopeOptions): Promise<boolean>;
 
-    /** Install hooks for the given agent. */
-    installHooks(agent: AgentType): Promise<HookInstallResult>;
+    /** Install hooks for the given agent. Accepts one or more HookSet from defineHooks(). */
+    installHooks(agent: AgentType, hooks: HookSet | HookSet[]): Promise<HookInstallResult>;
 
     /** Uninstall hooks for the given agent. */
     uninstallHooks(agent: AgentType): Promise<{ success: boolean; removed: string[]; error?: string }>;
@@ -64,16 +64,130 @@ export interface Kit {
     getDataDir(options?: ScopeOptions): string;
 }
 
+// ---------------------------------------------------------------------------
+// Hook definition types
+// ---------------------------------------------------------------------------
+
+/** Claude Code / Codex native hook event names. */
+export type ClaudeCodeEvent =
+    | 'SessionStart'
+    | 'InstructionsLoaded'
+    | 'UserPromptSubmit'
+    | 'PreToolUse'
+    | 'PermissionRequest'
+    | 'PostToolUse'
+    | 'PostToolUseFailure'
+    | 'Notification'
+    | 'SubagentStart'
+    | 'SubagentStop'
+    | 'Stop'
+    | 'TeammateIdle'
+    | 'TaskCompleted'
+    | 'ConfigChange'
+    | 'WorktreeCreate'
+    | 'WorktreeRemove'
+    | 'PreCompact'
+    | 'PostCompact'
+    | 'Elicitation'
+    | 'ElicitationResult'
+    | 'SessionEnd';
+
+/** OpenCode native hook event names. */
+export type OpenCodeEvent =
+    | 'event'
+    | 'config'
+    | 'tool'
+    | 'auth'
+    | 'chat.message'
+    | 'chat.params'
+    | 'chat.headers'
+    | 'permission.ask'
+    | 'command.execute.before'
+    | 'tool.execute.before'
+    | 'shell.env'
+    | 'tool.execute.after'
+    | 'experimental.chat.messages.transform'
+    | 'experimental.chat.system.transform'
+    | 'experimental.session.compacting'
+    | 'experimental.text.complete'
+    | 'tool.definition';
+
+/** OpenClaw plugin hook event names. */
+export type OpenClawPluginEvent =
+    | 'before_model_resolve'
+    | 'before_prompt_build'
+    | 'before_agent_start'
+    | 'llm_input'
+    | 'llm_output'
+    | 'agent_end'
+    | 'before_compaction'
+    | 'after_compaction'
+    | 'before_reset'
+    | 'message_received'
+    | 'message_sending'
+    | 'message_sent'
+    | 'before_tool_call'
+    | 'after_tool_call'
+    | 'tool_result_persist'
+    | 'before_message_write'
+    | 'session_start'
+    | 'session_end'
+    | 'subagent_spawning'
+    | 'subagent_delivery_target'
+    | 'subagent_spawned'
+    | 'subagent_ended'
+    | 'gateway_start'
+    | 'gateway_stop';
+
+/** OpenClaw internal hook event names (type:action). */
+export type OpenClawInternalEvent =
+    | 'command:new'
+    | 'command:reset'
+    | 'command:stop'
+    | 'session:compact:before'
+    | 'session:compact:after'
+    | 'agent:bootstrap'
+    | 'gateway:startup'
+    | 'message:received'
+    | 'message:sent'
+    | 'message:transcribed'
+    | 'message:preprocessed';
+
+/** All OpenClaw hook event names (plugin + internal). */
+export type OpenClawEvent = OpenClawPluginEvent | OpenClawInternalEvent;
+
+/** Map from agent type to its event name union. */
+export type AgentEventMap = {
+    'claude-code': ClaudeCodeEvent;
+    codex: ClaudeCodeEvent;
+    opencode: OpenCodeEvent;
+    openclaw: OpenClawEvent;
+};
+
 /**
- * Describes an intent that was skipped during hook installation.
+ * A single hook definition for a specific agent.
+ *
+ * - `events`: one or more native event names for this agent.
+ * - `content`: the hook content (shell script, TypeScript code, handler.ts body, etc.).
+ *   Users are fully responsible for the content — agent-kit only writes it to the correct path.
+ * - `description`: (OpenClaw only) human-readable description for HOOK.md. Defaults to auto-generated.
  */
-export interface SkippedIntent {
-    /** The intent type that was skipped (e.g. 'onPermission'). */
-    intent: string;
-    /** The agent for which it was skipped. */
-    agent: string;
-    /** Human-readable reason for skipping. */
-    reason: string;
+export interface HookDefinition<A extends AgentType = AgentType> {
+    events: A extends keyof AgentEventMap ? AgentEventMap[A][] : string[];
+    content: string;
+    /** OpenClaw only — description for HOOK.md. Ignored by other agents. */
+    description?: string;
+}
+
+/**
+ * A validated set of hook definitions for a specific agent, returned by defineHooks().
+ * This is an opaque token — users should not construct it directly.
+ */
+export interface HookSet<A extends AgentType = AgentType> {
+    /** @internal brand field */
+    readonly __brand: 'HookSet';
+    readonly agent: A;
+    readonly definitions: readonly HookDefinition<A>[];
 }
 
 /**
@@ -85,10 +199,7 @@ export interface HookInstallResult {
     filesWritten: string[];
     settingsUpdated: boolean;
     notes: string[];
-    /** Degradation and conflict warnings (e.g. raw overrides, partial support). */
     warnings: string[];
-    /** Intents that were completely skipped for this agent. */
-    skipped: SkippedIntent[];
     error?: string;
 }
 
