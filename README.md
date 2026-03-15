@@ -22,7 +22,7 @@ npm install @s_s/agent-kit
 ```typescript
 import { createKit, defineHooks, detectAgent } from '@s_s/agent-kit';
 
-// 1. 创建 kit 实例（支持解构）
+// 1. 创建 kit 实例
 const { injectPrompt, installHooks, getDataDir } = createKit('my-mcp');
 
 // 2. 声明 hook（每个 agent 独立声明，内容由用户完全控制）
