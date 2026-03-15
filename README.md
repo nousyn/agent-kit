@@ -92,15 +92,6 @@ createKit(name: string, options?: KitOptions): Kit
 | `hasHooksInstalled(agent)`              | 检查 hooks 是否已安装         |
 | `getDataDir(options?)`                  | 获取跨平台数据目录路径        |
 
-### Hook 系统
-
-Hook 系统分为两个阶段：**声明**和**安装**。
-
-1. **声明**：通过全局 `hooks.*` API 声明意图（`inject` / `beforeToolCall` / `afterToolCall` / `onSession` / `onPermission`），以及 `raw` / `extend` 两种高级注册方式
-2. **安装**：调用 `kit.installHooks(agent)` 时，从全局注册中心读取所有声明，翻译为目标 agent 的原生格式并写入磁盘
-
-详细的 API 说明、示例、三层优先级机制和降级行为，请参阅 **[Hook 使用指南](docs/hook-usage.md)**。各 agent 原生 hook 能力的完整横向对比，请参阅 **[Hook 横向对比](docs/hooks-comparison.md)**。
-
 ### Kit 方法详情
 
 #### `kit.injectPrompt(agent, prompt, options?)`
@@ -168,6 +159,15 @@ getDataDir(options?: ScopeOptions): string
 | `project`        | `{projectRoot}/.{name}`                                                                                      |
 
 全局路径可通过环境变量覆盖（默认变量名：`{NAME}_DATA_DIR`）。
+
+### Hook 系统
+
+Hook 系统分为两个阶段：**声明**和**安装**。
+
+1. **声明**：通过全局 `hooks.*` API 声明意图（`inject` / `beforeToolCall` / `afterToolCall` / `onSession` / `onPermission`），以及 `raw` / `extend` 两种高级注册方式
+2. **安装**：调用 `kit.installHooks(agent)` 时，从全局注册中心读取所有声明，翻译为目标 agent 的原生格式并写入磁盘
+
+详细的 API 说明、示例、三层优先级机制和降级行为，请参阅 **[Hook 使用指南](docs/hook-usage.md)**。各 agent 原生 hook 能力的完整横向对比，请参阅 **[Hook 横向对比](docs/hooks-comparison.md)**。
 
 ### 独立函数
 
