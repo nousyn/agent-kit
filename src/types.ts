@@ -16,30 +16,16 @@ export interface ScopeOptions {
 }
 
 /**
- * Hook reminder texts for different lifecycle events.
- * Only perTurn is required; others are used by agents that support them.
- */
-export interface HookReminders {
-    /** Reminder injected on every user message turn. */
-    perTurn: string;
-    /** Reminder injected at session start (OpenClaw, OpenCode). */
-    sessionStart?: string;
-    /** Reminder injected before context compaction (OpenCode only). */
-    compaction?: string;
-    /** Reminder injected at session end. */
-    sessionEnd?: string;
-}
-
-/**
  * Configuration passed to register().
+ *
+ * register() handles identity only (name, prompt, directories, env).
+ * Hook behavior is declared exclusively via the hooks.* API (see hook-registry.ts).
  */
 export interface ToolConfig {
     /** Tool name — used for prompt markers, hook directories, data directories. */
     name: string;
     /** Prompt content to inject into agent config files. */
     prompt: string;
-    /** Hook reminder texts for lifecycle events. */
-    reminders?: HookReminders;
     /** Override data directory names. Defaults: global = name, project = `.${name}` */
     dirs?: {
         global?: string;
@@ -47,6 +33,18 @@ export interface ToolConfig {
     };
     /** Environment variable name to override the global data directory path. */
     envOverride?: string;
+}
+
+/**
+ * Describes an intent that was skipped during hook installation.
+ */
+export interface SkippedIntent {
+    /** The intent type that was skipped (e.g. 'onPermission'). */
+    intent: string;
+    /** The agent for which it was skipped. */
+    agent: string;
+    /** Human-readable reason for skipping. */
+    reason: string;
 }
 
 /**
@@ -58,6 +56,10 @@ export interface HookInstallResult {
     filesWritten: string[];
     settingsUpdated: boolean;
     notes: string[];
+    /** Degradation and conflict warnings (e.g. raw overrides, partial support). */
+    warnings: string[];
+    /** Intents that were completely skipped for this agent. */
+    skipped: SkippedIntent[];
     error?: string;
 }
 

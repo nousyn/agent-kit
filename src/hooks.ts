@@ -5,15 +5,47 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './register.js';
 import { AGENT_REGISTRY } from './types.js';
-import type { AgentType, HookInstallResult, HookReminders } from './types.js';
+import type { AgentType, HookInstallResult } from './types.js';
+import type { IntentType, RawHookRegistration } from './hook-types.js';
+import { getIntents, getRawHooks, getExtendHooks } from './hook-registry.js';
+import { checkAllDegradation } from './hook-capabilities.js';
+import { ClaudeCodeTranslator } from './hook-translators/claude-code.js';
+import { OpenCodeTranslator } from './hook-translators/opencode.js';
+import { OpenClawTranslator } from './hook-translators/openclaw.js';
+import type { AgentHookTranslator } from './hook-translators/types.js';
 
 const execFileAsync = promisify(execFile);
 
+// ---------------------------------------------------------------------------
+// Translator factory
+// ---------------------------------------------------------------------------
+
+function getTranslator(agent: AgentType): AgentHookTranslator {
+    switch (agent) {
+        case 'claude-code':
+            return new ClaudeCodeTranslator('claude-code');
+        case 'codex':
+            return new ClaudeCodeTranslator('codex');
+        case 'opencode':
+            return new OpenCodeTranslator();
+        case 'openclaw':
+            return new OpenClawTranslator();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// installHooks — main entry point
+// ---------------------------------------------------------------------------
+
 /**
  * Install hooks for the given agent type.
- * Generates hook files from registered reminders and writes them to the agent's hook directory.
  *
- * Requires register().
+ * Reads all registered intents, raw hooks, and extend hooks from the hook
+ * registry. Translates them into native hook files using the agent-specific
+ * translator. Runs degradation checks and conflict detection.
+ *
+ * Requires register() to be called first (for tool name and identity).
+ * Hook behavior must be declared via the hooks.* API (see hook-registry.ts).
  */
 export async function installHooks(agent: AgentType): Promise<HookInstallResult> {
     const config = getConfig();
@@ -27,20 +59,66 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
         filesWritten: [],
         settingsUpdated: false,
         notes: [],
+        warnings: [],
+        skipped: [],
     };
 
-    if (!config.reminders) {
-        result.error = 'No reminders configured. Register with reminders to use hooks.';
+    const intents = getIntents();
+    const rawHooks = getRawHooks();
+    const extendHooks = getExtendHooks();
+
+    // Check if there's anything to install
+    if (intents.length === 0 && rawHooks.size === 0 && extendHooks.size === 0) {
+        result.error =
+            'No hooks registered. Use hooks.inject(), hooks.beforeToolCall(), etc. to declare hook behavior.';
         return result;
     }
 
     try {
-        const files = buildHookFiles(agent, config.name, config.reminders);
+        // Step 1: Run degradation checks
+        const intentTypes = [...new Set(intents.map((i) => i.type))] as IntentType[];
+        const degradations = checkAllDegradation(agent, intentTypes);
+        for (const d of degradations) {
+            if (d.level === 'unsupported') {
+                result.warnings.push(d.message);
+            } else if (d.level === 'partial') {
+                result.warnings.push(d.message);
+            }
+        }
 
-        // Step 1: Write hook files
+        // Step 2: Filter raw/extend hooks for this agent
+        const agentRawHooks = new Map<string, RawHookRegistration>();
+        for (const [key, reg] of rawHooks) {
+            if (key.startsWith(`${agent}::`)) {
+                agentRawHooks.set(key, reg);
+            }
+        }
+
+        const agentExtendHooks = new Map<string, readonly import('./hook-types.js').ExtendHookRegistration[]>();
+        for (const [key, regs] of extendHooks) {
+            if (key.startsWith(`${agent}::`)) {
+                agentExtendHooks.set(key, regs);
+            }
+        }
+
+        // Step 3: Translate intents → native files
+        const translator = getTranslator(agent);
+        const translation = translator.translate(intents, agentRawHooks, agentExtendHooks, config.name);
+
+        // Merge translation warnings and skipped
+        result.warnings.push(...translation.warnings);
+        result.skipped.push(...translation.skipped);
+
+        // Step 4: Write hook files
+        if (Object.keys(translation.files).length === 0) {
+            result.notes.push('No hook files generated for this agent.');
+            result.success = true;
+            return result;
+        }
+
         await fs.mkdir(hookDir, { recursive: true });
 
-        for (const [fileName, content] of Object.entries(files)) {
+        for (const [fileName, content] of Object.entries(translation.files)) {
             const filePath = path.join(hookDir, fileName);
             await fs.writeFile(filePath, content, 'utf-8');
 
@@ -51,18 +129,18 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
             result.filesWritten.push(filePath);
         }
 
-        // Step 2: Merge settings.json for agents that need it (Claude Code / Codex)
+        // Step 5: Merge settings.json for agents that need it (Claude Code / Codex)
         if (entry.getSettingsPath) {
             const settingsPath = entry.getSettingsPath(home);
-            const activatorFileName = Object.keys(files).find((f) => f.endsWith('.sh'));
-            if (activatorFileName) {
-                const activatorPath = path.join(hookDir, activatorFileName);
-                await mergeHookSettings(settingsPath, activatorPath, config.name);
+            const shellFiles = Object.keys(translation.files).filter((f) => f.endsWith('.sh'));
+
+            if (shellFiles.length > 0) {
+                await mergeHookSettings(settingsPath, hookDir, shellFiles, config.name);
                 result.settingsUpdated = true;
             }
         }
 
-        // Step 3: Agent-specific post-install
+        // Step 6: Agent-specific post-install
         if (agent === 'openclaw') {
             try {
                 await execFileAsync('openclaw', ['hooks', 'enable', config.name]);
@@ -80,6 +158,67 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// uninstallHooks
+// ---------------------------------------------------------------------------
+
+/**
+ * Uninstall hooks for the given agent type.
+ *
+ * Removes hook files from the hook directory and cleans up settings.json
+ * entries for agents that use them (Claude Code, Codex).
+ *
+ * Requires register() to be called first.
+ */
+export async function uninstallHooks(
+    agent: AgentType,
+): Promise<{ success: boolean; removed: string[]; error?: string }> {
+    const config = getConfig();
+    const home = os.homedir();
+    const entry = AGENT_REGISTRY[agent];
+    const hookDir = entry.getHookDir(home, config.name);
+
+    const removed: string[] = [];
+
+    try {
+        // Remove hook directory
+        try {
+            const files = await fs.readdir(hookDir);
+            for (const file of files) {
+                const filePath = path.join(hookDir, file);
+                await fs.unlink(filePath);
+                removed.push(filePath);
+            }
+            await fs.rmdir(hookDir);
+        } catch {
+            // Directory may not exist — that's fine
+        }
+
+        // Clean settings.json for Claude Code / Codex
+        if (entry.getSettingsPath) {
+            const settingsPath = entry.getSettingsPath(home);
+            await cleanHookSettings(settingsPath, config.name);
+        }
+
+        // Deactivate for OpenClaw
+        if (agent === 'openclaw') {
+            try {
+                await execFileAsync('openclaw', ['hooks', 'disable', config.name]);
+            } catch {
+                // Best effort
+            }
+        }
+
+        return { success: true, removed };
+    } catch (err) {
+        return { success: false, removed, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// hasHooksInstalled
+// ---------------------------------------------------------------------------
+
 /**
  * Check if hooks are already installed for the given agent type.
  *
@@ -91,165 +230,28 @@ export async function hasHooksInstalled(agent: AgentType): Promise<boolean> {
     const entry = AGENT_REGISTRY[agent];
     const hookDir = entry.getHookDir(home, config.name);
 
-    const files = buildHookFiles(agent, config.name, config.reminders ?? { perTurn: '' });
-    for (const fileName of Object.keys(files)) {
-        try {
-            await fs.access(path.join(hookDir, fileName));
-            return true;
-        } catch {
-            continue;
-        }
+    try {
+        const files = await fs.readdir(hookDir);
+        return files.length > 0;
+    } catch {
+        return false;
     }
-
-    return false;
-}
-
-// ---------------------------------------------------------------------------
-// Hook file generation — high-level factory
-// ---------------------------------------------------------------------------
-
-/**
- * Build hook files for a given agent type.
- * Returns Record<filename, content>.
- * @internal — exported for testing.
- */
-export function buildHookFiles(agent: AgentType, toolName: string, reminders: HookReminders): Record<string, string> {
-    switch (agent) {
-        case 'claude-code':
-        case 'codex':
-            return buildShellHookFiles(toolName, reminders);
-        case 'openclaw':
-            return buildOpenClawHookFiles(toolName, reminders);
-        case 'opencode':
-            return buildOpenCodeHookFiles(toolName, reminders);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Claude Code / Codex — shell script
-// ---------------------------------------------------------------------------
-
-function buildShellHookFiles(toolName: string, reminders: HookReminders): Record<string, string> {
-    const script = `#!/bin/bash
-# ${capitalize(toolName)} Activator Hook
-# Triggers on UserPromptSubmit
-
-set -e
-
-cat << 'EOF'
-${reminders.perTurn}
-EOF
-`;
-    return { [`${toolName}-activator.sh`]: script };
-}
-
-// ---------------------------------------------------------------------------
-// OpenClaw — HOOK.md + handler.ts
-// ---------------------------------------------------------------------------
-
-function buildOpenClawHookFiles(toolName: string, reminders: HookReminders): Record<string, string> {
-    const hookMd = `---
-name: ${toolName}
-description: "${capitalize(toolName)} hook - injects reminder during agent bootstrap"
-metadata: {"openclaw":{"events":["agent:bootstrap"]}}
----
-`;
-
-    const reminderParts = [reminders.sessionStart, reminders.perTurn].filter(Boolean).join('\n\n');
-
-    const handlerTs = `const REMINDER_CONTENT = \`
-${reminderParts}
-\`;
-
-const handler = async (event) => {
-    if (event.type !== 'agent' || event.action !== 'bootstrap') {
-        return;
-    }
-
-    if (event.sessionKey && event.sessionKey.includes(':subagent:')) {
-        return;
-    }
-
-    if (Array.isArray(event.context.bootstrapFiles)) {
-        event.context.bootstrapFiles.push({
-            path: '${toolName.toUpperCase().replace(/-/g, '_')}_REMINDER.md',
-            content: REMINDER_CONTENT,
-            virtual: true,
-        });
-    }
-};
-
-export default handler;
-`;
-
-    return {
-        'HOOK.md': hookMd,
-        'handler.ts': handlerTs,
-    };
-}
-
-// ---------------------------------------------------------------------------
-// OpenCode — TypeScript plugin
-// ---------------------------------------------------------------------------
-
-function buildOpenCodeHookFiles(toolName: string, reminders: HookReminders): Record<string, string> {
-    const exportName = toPascalCase(toolName) + 'Reminder';
-
-    const sessionStartReminder = reminders.sessionStart
-        ? `${reminders.sessionStart}\n\n${reminders.perTurn}`
-        : reminders.perTurn;
-
-    const hasCompaction = !!reminders.compaction;
-
-    const pluginTs = `/**
- * ${capitalize(toolName)} Reminder Plugin for OpenCode
- */
-
-const SESSION_START_REMINDER = \`${sessionStartReminder}\`;
-
-const PER_TURN_REMINDER = \`${reminders.perTurn}\`;
-${hasCompaction ? `\nconst COMPACTION_REMINDER = \`${reminders.compaction}\`;` : ''}
-
-const seenSessions = new Set();
-
-export const ${exportName} = async () => {
-    return {
-        "experimental.chat.messages.transform": async (_input, output) => {
-            const messages = output.messages;
-            if (!messages || messages.length === 0) return;
-
-            const sessionID = messages[0]?.info?.sessionID;
-            const isNewSession = sessionID && !seenSessions.has(sessionID);
-            if (sessionID) seenSessions.add(sessionID);
-
-            const reminder = isNewSession ? SESSION_START_REMINDER : PER_TURN_REMINDER;
-
-            for (let i = messages.length - 1; i >= 0; i--) {
-                if (messages[i].info?.role === "user") {
-                    messages[i].parts.push({ type: "text", text: reminder });
-                    break;
-                }
-            }
-        },${
-            hasCompaction
-                ? `
-        "experimental.session.compacting": async (_input, output) => {
-            output.context.push(COMPACTION_REMINDER);
-        },`
-                : ''
-        }
-    };
-};
-`;
-
-    return { [`${toolName}-reminder.ts`]: pluginTs };
 }
 
 // ---------------------------------------------------------------------------
 // Settings merge (Claude Code / Codex)
 // ---------------------------------------------------------------------------
 
-async function mergeHookSettings(settingsPath: string, activatorPath: string, toolName: string): Promise<void> {
+/**
+ * Merge hook entries into settings.json for Claude Code / Codex.
+ * Maps each shell script to its corresponding native hook event based on filename conventions.
+ */
+async function mergeHookSettings(
+    settingsPath: string,
+    hookDir: string,
+    shellFiles: string[],
+    toolName: string,
+): Promise<void> {
     let settings: Record<string, unknown> = {};
     try {
         const raw = await fs.readFile(settingsPath, 'utf-8');
@@ -263,44 +265,119 @@ async function mergeHookSettings(settingsPath: string, activatorPath: string, to
     }
     const hooks = settings.hooks as Record<string, unknown[]>;
 
-    const hookEntry = {
-        matcher: '',
-        hooks: [{ type: 'command', command: activatorPath }],
+    // Map filename patterns to native hook events
+    const fileToEvent: Record<string, string> = {
+        inject: 'UserPromptSubmit',
+        'session-start': 'SessionStart',
+        'session-end': 'SessionEnd',
+        compaction: 'PreCompact',
+        'before-tool': 'PreToolUse',
+        'after-tool': 'PostToolUse',
+        'on-session-start': 'SessionStart',
+        'on-session-end': 'SessionEnd',
+        permission: 'PermissionRequest',
     };
 
-    if (!Array.isArray(hooks.UserPromptSubmit)) {
-        hooks.UserPromptSubmit = [];
-    }
+    for (const fileName of shellFiles) {
+        const activatorPath = path.join(hookDir, fileName);
 
-    // Remove existing entries for this tool
-    hooks.UserPromptSubmit = hooks.UserPromptSubmit.filter((entry) => {
-        if (!entry || typeof entry !== 'object') return true;
-        const e = entry as Record<string, unknown>;
-        if (!Array.isArray(e.hooks)) return true;
-        return !e.hooks.some((h: unknown) => {
-            if (!h || typeof h !== 'object') return false;
-            const hook = h as Record<string, unknown>;
-            return typeof hook.command === 'string' && hook.command.includes(toolName);
+        // Determine the event from filename
+        let event: string | undefined;
+
+        // Check raw hooks first (pattern: toolName-raw-hookname.sh)
+        const rawMatch = fileName.match(/^.+-raw-(.+)\.sh$/);
+        if (rawMatch) {
+            // Raw hooks use the hook name directly (case-insensitive lookup)
+            event = rawMatch[1].charAt(0).toUpperCase() + rawMatch[1].slice(1);
+        } else {
+            // Intent-generated hooks use filename conventions
+            for (const [pattern, hookEvent] of Object.entries(fileToEvent)) {
+                if (fileName.includes(pattern)) {
+                    event = hookEvent;
+                    break;
+                }
+            }
+        }
+
+        if (!event) continue;
+
+        const hookEntry = {
+            matcher: '',
+            hooks: [{ type: 'command', command: activatorPath }],
+        };
+
+        if (!Array.isArray(hooks[event])) {
+            hooks[event] = [];
+        }
+
+        // Remove existing entries for this tool
+        hooks[event] = hooks[event].filter((entry) => {
+            if (!entry || typeof entry !== 'object') return true;
+            const e = entry as Record<string, unknown>;
+            if (!Array.isArray(e.hooks)) return true;
+            return !e.hooks.some((h: unknown) => {
+                if (!h || typeof h !== 'object') return false;
+                const hook = h as Record<string, unknown>;
+                return typeof hook.command === 'string' && hook.command.includes(toolName);
+            });
         });
-    });
 
-    hooks.UserPromptSubmit.push(hookEntry);
+        hooks[event].push(hookEntry);
+    }
 
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
 }
 
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
+/**
+ * Remove all hook entries for a tool from settings.json.
+ */
+async function cleanHookSettings(settingsPath: string, toolName: string): Promise<void> {
+    let settings: Record<string, unknown>;
+    try {
+        const raw = await fs.readFile(settingsPath, 'utf-8');
+        settings = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+        return; // No settings file to clean
+    }
 
-function capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-}
+    if (!settings.hooks || typeof settings.hooks !== 'object') return;
 
-function toPascalCase(str: string): string {
-    return str
-        .split(/[-_]/)
-        .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
-        .join('');
+    const hooks = settings.hooks as Record<string, unknown[]>;
+    let changed = false;
+
+    for (const [event, entries] of Object.entries(hooks)) {
+        if (!Array.isArray(entries)) continue;
+
+        const filtered = entries.filter((entry) => {
+            if (!entry || typeof entry !== 'object') return true;
+            const e = entry as Record<string, unknown>;
+            if (!Array.isArray(e.hooks)) return true;
+            const hasToolHook = e.hooks.some((h: unknown) => {
+                if (!h || typeof h !== 'object') return false;
+                const hook = h as Record<string, unknown>;
+                return typeof hook.command === 'string' && hook.command.includes(toolName);
+            });
+            return !hasToolHook;
+        });
+
+        if (filtered.length !== entries.length) {
+            hooks[event] = filtered;
+            changed = true;
+        }
+
+        // Remove empty event arrays
+        if (filtered.length === 0) {
+            delete hooks[event];
+        }
+    }
+
+    // Remove empty hooks object
+    if (Object.keys(hooks).length === 0) {
+        delete settings.hooks;
+    }
+
+    if (changed) {
+        await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+    }
 }
