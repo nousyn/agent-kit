@@ -1,6 +1,6 @@
 {
   "name": "@s_s/agent-kit",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "面向 MCP Server 与 Skill 开发的 Agent 适配工具包",
   "type": "module",
   "main": "./build/index.js",
