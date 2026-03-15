@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { getConfig } from './register.js';
 import { AGENT_REGISTRY } from './types.js';
 import type { AgentType, ScopeOptions } from './types.js';
 
@@ -11,10 +10,14 @@ import type { AgentType, ScopeOptions } from './types.js';
  * Uses `<!-- {name}:start -->` / `<!-- {name}:end -->` markers.
  * First call appends to end of file; subsequent calls replace the existing block.
  *
- * Requires register().
+ * @internal — called by the Kit object returned from createKit().
  */
-export async function injectPrompt(agent: AgentType, options?: ScopeOptions): Promise<void> {
-    const config = getConfig();
+export async function injectPrompt(
+    name: string,
+    prompt: string,
+    agent: AgentType,
+    options?: ScopeOptions,
+): Promise<void> {
     const targetPath = resolveConfigPath(agent, options);
 
     // Read existing content
@@ -25,7 +28,7 @@ export async function injectPrompt(agent: AgentType, options?: ScopeOptions): Pr
         // File doesn't exist yet
     }
 
-    const updated = applyPromptInjection(existingContent, config.name, config.prompt);
+    const updated = applyPromptInjection(existingContent, name, prompt);
 
     // Ensure parent directory exists
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -35,15 +38,14 @@ export async function injectPrompt(agent: AgentType, options?: ScopeOptions): Pr
 /**
  * Check if prompt has already been injected into the agent's config file.
  *
- * Requires register().
+ * @internal — called by the Kit object returned from createKit().
  */
-export async function hasPromptInjected(agent: AgentType, options?: ScopeOptions): Promise<boolean> {
-    const config = getConfig();
+export async function hasPromptInjected(name: string, agent: AgentType, options?: ScopeOptions): Promise<boolean> {
     const targetPath = resolveConfigPath(agent, options);
 
     try {
         const content = await fs.readFile(targetPath, 'utf-8');
-        return content.includes(markerStart(config.name));
+        return content.includes(markerStart(name));
     } catch {
         return false;
     }

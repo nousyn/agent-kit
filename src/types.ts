@@ -16,16 +16,9 @@ export interface ScopeOptions {
 }
 
 /**
- * Configuration passed to register().
- *
- * register() handles identity only (name, prompt, directories, env).
- * Hook behavior is declared exclusively via the hooks.* API (see hook-registry.ts).
+ * Options for createKit(). Everything except name is optional.
  */
-export interface ToolConfig {
-    /** Tool name — used for prompt markers, hook directories, data directories. */
-    name: string;
-    /** Prompt content to inject into agent config files. */
-    prompt: string;
+export interface KitOptions {
     /** Override data directory names. Defaults: global = name, project = `.${name}` */
     dirs?: {
         global?: string;
@@ -33,6 +26,42 @@ export interface ToolConfig {
     };
     /** Environment variable name to override the global data directory path. */
     envOverride?: string;
+}
+
+/**
+ * Internal resolved config derived from createKit() arguments.
+ * @internal
+ */
+export interface ResolvedKitConfig {
+    name: string;
+    dirs?: { global?: string; project?: string };
+    envOverride?: string;
+}
+
+/**
+ * The object returned by createKit(). Provides all kit functions bound to the tool name.
+ */
+export interface Kit {
+    /** The tool name this kit is bound to. */
+    readonly name: string;
+
+    /** Inject prompt into agent config file. */
+    injectPrompt(agent: AgentType, prompt: string, options?: ScopeOptions): Promise<void>;
+
+    /** Check if prompt has been injected. */
+    hasPromptInjected(agent: AgentType, options?: ScopeOptions): Promise<boolean>;
+
+    /** Install hooks for the given agent. */
+    installHooks(agent: AgentType): Promise<HookInstallResult>;
+
+    /** Uninstall hooks for the given agent. */
+    uninstallHooks(agent: AgentType): Promise<{ success: boolean; removed: string[]; error?: string }>;
+
+    /** Check if hooks are installed for the given agent. */
+    hasHooksInstalled(agent: AgentType): Promise<boolean>;
+
+    /** Get platform-appropriate data directory path. */
+    getDataDir(options?: ScopeOptions): string;
 }
 
 /**

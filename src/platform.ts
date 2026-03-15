@@ -3,8 +3,7 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getConfig } from './register.js';
-import type { ScopeOptions } from './types.js';
+import type { ResolvedKitConfig, ScopeOptions } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,10 +15,9 @@ const PROJECT_ROOT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.t
  * - global: follows platform conventions (macOS ~/Library/Application Support, Linux XDG, Windows APPDATA)
  * - project: `<projectRoot>/.<name>` (or custom dir name)
  *
- * Requires register() to have been called.
+ * @internal — called by the Kit object returned from createKit().
  */
-export function getDataDir(options?: ScopeOptions): string {
-    const config = getConfig();
+export function getDataDir(config: ResolvedKitConfig, options?: ScopeOptions): string {
     const scope = options?.scope ?? 'global';
 
     if (scope === 'project') {
@@ -53,7 +51,7 @@ export function getDataDir(options?: ScopeOptions): string {
  * Detect project root directory.
  *
  * Resolution order: git root > project marker files (.git, package.json, etc.) > cwd fallback.
- * This is an independent function — does not require register().
+ * This is an independent function — does not require createKit().
  */
 export async function detectProjectRoot(cwd?: string): Promise<string> {
     const startDir = cwd ?? process.cwd();

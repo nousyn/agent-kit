@@ -5,13 +5,10 @@
 ## 快速开始
 
 ```ts
-import { register, hooks, installHooks } from '@s_s/agent-kit';
+import { createKit, hooks } from '@s_s/agent-kit';
 
-// 1. 注册工具身份
-register({
-  name: 'my-tool',
-  prompt: 'My tool system prompt...',
-});
+// 1. 创建 kit 实例
+const { installHooks } = createKit('my-tool');
 
 // 2. 声明 hook 意图
 hooks.inject({
@@ -155,6 +152,7 @@ hooks.raw({
 `installHooks()` 返回值包含完整的降级信息：
 
 ```ts
+const { installHooks } = createKit('my-tool');
 const result = await installHooks('opencode');
 
 // warnings: 降级和冲突警告
@@ -191,7 +189,7 @@ const unsupported = isIntentFullyUnsupported('openclaw', 'onPermission');
 ## 卸载 Hook
 
 ```ts
-import { uninstallHooks } from '@s_s/agent-kit';
+const { uninstallHooks } = createKit('my-tool');
 
 const result = await uninstallHooks('claude-code');
 console.log(result.removed); // 被删除的文件列表

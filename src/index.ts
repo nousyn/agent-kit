@@ -1,5 +1,16 @@
+// Core factory
+export { createKit } from './create-kit.js';
+
 // Types
-export type { AgentType, StorageScope, ScopeOptions, ToolConfig, HookInstallResult, SkippedIntent } from './types.js';
+export type {
+    AgentType,
+    StorageScope,
+    ScopeOptions,
+    KitOptions,
+    Kit,
+    HookInstallResult,
+    SkippedIntent,
+} from './types.js';
 export { AGENT_TYPES, CLIENT_NAME_MAP } from './types.js';
 
 // Hook intent types
@@ -30,20 +41,11 @@ export {
     isIntentFullyUnsupported,
 } from './hook-capabilities.js';
 
-// Register
-export { register } from './register.js';
-
-// Platform
-export { getDataDir, detectProjectRoot } from './platform.js';
+// Platform (only detectProjectRoot is standalone; getDataDir is on Kit)
+export { detectProjectRoot } from './platform.js';
 
 // Detection
 export { detectAgent, detectAgentFromClient } from './detect.js';
 
-// Prompt
-export { injectPrompt, hasPromptInjected } from './prompt.js';
-
-// Hooks — declaration API
+// Hooks — declaration API (global, not bound to kit instance)
 export { hooks } from './hook-registry.js';
-
-// Hooks — installation
-export { installHooks, uninstallHooks, hasHooksInstalled } from './hooks.js';

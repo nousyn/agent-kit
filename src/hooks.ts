@@ -3,7 +3,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getConfig } from './register.js';
 import { AGENT_REGISTRY } from './types.js';
 import type { AgentType, HookInstallResult } from './types.js';
 import type { IntentType, RawHookRegistration } from './hook-types.js';
@@ -44,14 +43,12 @@ function getTranslator(agent: AgentType): AgentHookTranslator {
  * registry. Translates them into native hook files using the agent-specific
  * translator. Runs degradation checks and conflict detection.
  *
- * Requires register() to be called first (for tool name and identity).
- * Hook behavior must be declared via the hooks.* API (see hook-registry.ts).
+ * @internal — called by the Kit object returned from createKit().
  */
-export async function installHooks(agent: AgentType): Promise<HookInstallResult> {
-    const config = getConfig();
+export async function installHooks(name: string, agent: AgentType): Promise<HookInstallResult> {
     const home = os.homedir();
     const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, config.name);
+    const hookDir = entry.getHookDir(home, name);
 
     const result: HookInstallResult = {
         success: false,
@@ -103,7 +100,7 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
 
         // Step 3: Translate intents → native files
         const translator = getTranslator(agent);
-        const translation = translator.translate(intents, agentRawHooks, agentExtendHooks, config.name);
+        const translation = translator.translate(intents, agentRawHooks, agentExtendHooks, name);
 
         // Merge translation warnings and skipped
         result.warnings.push(...translation.warnings);
@@ -135,7 +132,7 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
             const shellFiles = Object.keys(translation.files).filter((f) => f.endsWith('.sh'));
 
             if (shellFiles.length > 0) {
-                await mergeHookSettings(settingsPath, hookDir, shellFiles, config.name);
+                await mergeHookSettings(settingsPath, hookDir, shellFiles, name);
                 result.settingsUpdated = true;
             }
         }
@@ -143,10 +140,10 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
         // Step 6: Agent-specific post-install
         if (agent === 'openclaw') {
             try {
-                await execFileAsync('openclaw', ['hooks', 'enable', config.name]);
-                result.notes.push(`Hook activated via \`openclaw hooks enable ${config.name}\`.`);
+                await execFileAsync('openclaw', ['hooks', 'enable', name]);
+                result.notes.push(`Hook activated via \`openclaw hooks enable ${name}\`.`);
             } catch {
-                result.notes.push(`Run \`openclaw hooks enable ${config.name}\` to activate the hook.`);
+                result.notes.push(`Run \`openclaw hooks enable ${name}\` to activate the hook.`);
             }
         }
 
@@ -168,15 +165,15 @@ export async function installHooks(agent: AgentType): Promise<HookInstallResult>
  * Removes hook files from the hook directory and cleans up settings.json
  * entries for agents that use them (Claude Code, Codex).
  *
- * Requires register() to be called first.
+ * @internal — called by the Kit object returned from createKit().
  */
 export async function uninstallHooks(
+    name: string,
     agent: AgentType,
 ): Promise<{ success: boolean; removed: string[]; error?: string }> {
-    const config = getConfig();
     const home = os.homedir();
     const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, config.name);
+    const hookDir = entry.getHookDir(home, name);
 
     const removed: string[] = [];
 
@@ -197,13 +194,13 @@ export async function uninstallHooks(
         // Clean settings.json for Claude Code / Codex
         if (entry.getSettingsPath) {
             const settingsPath = entry.getSettingsPath(home);
-            await cleanHookSettings(settingsPath, config.name);
+            await cleanHookSettings(settingsPath, name);
         }
 
         // Deactivate for OpenClaw
         if (agent === 'openclaw') {
             try {
-                await execFileAsync('openclaw', ['hooks', 'disable', config.name]);
+                await execFileAsync('openclaw', ['hooks', 'disable', name]);
             } catch {
                 // Best effort
             }
@@ -222,13 +219,12 @@ export async function uninstallHooks(
 /**
  * Check if hooks are already installed for the given agent type.
  *
- * Requires register().
+ * @internal — called by the Kit object returned from createKit().
  */
-export async function hasHooksInstalled(agent: AgentType): Promise<boolean> {
-    const config = getConfig();
+export async function hasHooksInstalled(name: string, agent: AgentType): Promise<boolean> {
     const home = os.homedir();
     const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, config.name);
+    const hookDir = entry.getHookDir(home, name);
 
     try {
         const files = await fs.readdir(hookDir);

@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { register, _resetForTesting as resetRegister } from '../src/register.js';
 import { hooks } from '../src/hook-registry.js';
 import { ClaudeCodeTranslator } from '../src/hook-translators/claude-code.js';
 import { OpenCodeTranslator } from '../src/hook-translators/opencode.js';
@@ -12,7 +11,6 @@ const emptyExtend = new Map<string, readonly ExtendHookRegistration[]>();
 
 describe('hooks — 翻译器集成 (迁移自旧 buildHookFiles 测试)', () => {
     beforeEach(() => {
-        resetRegister();
         hooks._resetForTesting();
     });
 
