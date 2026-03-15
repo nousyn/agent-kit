@@ -190,7 +190,6 @@ const unsupported = isIntentFullyUnsupported('openclaw', 'onPermission');
 
 ```ts
 const { uninstallHooks } = createKit('my-tool');
-
 const result = await uninstallHooks('claude-code');
 console.log(result.removed); // 被删除的文件列表
 ```

@@ -2,24 +2,22 @@
 
 MCP Server / Skill 开发基础设施库。提供 agent 检测、prompt 注入、hook 安装和跨平台数据目录等通用能力，让多个 MCP/Skill 项目共享同一套 agent 适配层，避免重复实现。
 
-## Features
+## 功能
 
 - **Agent 检测** — 通过文件系统特征或 MCP clientInfo 自动识别 agent 类型（OpenCode、Claude Code、OpenClaw、Codex）
 - **Prompt 注入** — 向 agent 配置文件（`AGENTS.md`、`CLAUDE.md`、manifests 等）注入自定义指令，支持幂等更新
-- **Intent-based Hook 系统** — 按用户意图声明 hook 行为（注入内容、拦截工具调用、观测结果、权限决策等），内部自动翻译为各 agent 的原生格式
-- **三层优先级** — Intent（通用）< extend（微调）< raw（完全接管），冲突时高层胜出并输出警告
-- **显式降级** — 能力矩阵精确记录各 agent 对每种意图的支持程度，不静默跳过
+- **Intent-based Hook 系统** — 按意图声明，自动翻译为各 agent 原生格式，支持三层优先级和显式降级
 - **跨平台数据目录** — 自动适配 macOS / Linux / Windows，支持 global / project 两种作用域
 - **零运行时依赖** — 纯 TypeScript，零 dependencies
 - **工厂模式** — `createKit(name)` 返回绑定了工具名的函数集，支持解构，无全局状态
 
-## Install
+## 安装
 
 ```bash
 npm install @s_s/agent-kit
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
 import { createKit, hooks, detectAgent } from '@s_s/agent-kit';
@@ -60,14 +58,6 @@ const dataDir = getDataDir(); // global scope
 const projectDir = getDataDir({ scope: 'project', projectRoot: '/path/to/project' });
 ```
 
-也可以不解构，直接使用 kit 对象：
-
-```typescript
-const kit = createKit('my-mcp');
-await kit.injectPrompt(agent, prompt);
-await kit.installHooks(agent);
-```
-
 ## API
 
 ### `createKit(name, options?)`
@@ -102,90 +92,14 @@ createKit(name: string, options?: KitOptions): Kit
 | `hasHooksInstalled(agent)`              | 检查 hooks 是否已安装         |
 | `getDataDir(options?)`                  | 获取跨平台数据目录路径        |
 
-### Hook 声明 API
+### Hook 系统
 
-通过 `hooks.*` 命名空间声明 hook 意图。`hooks` 是全局的，不绑定 kit 实例。所有声明在调用 `installHooks()` 时生效。
+Hook 系统分为两个阶段：**声明**和**安装**。
 
-#### `hooks.inject(config)`
+1. **声明**：通过全局 `hooks.*` API 声明意图（`inject` / `beforeToolCall` / `afterToolCall` / `onSession` / `onPermission`），以及 `raw` / `extend` 两种高级注册方式
+2. **安装**：调用 `kit.installHooks(agent)` 时，从全局注册中心读取所有声明，翻译为目标 agent 的原生格式并写入磁盘
 
-内容注入——将文本注入到 agent 上下文的各个生命周期点。
-
-```typescript
-hooks.inject({
-  perTurn: string;        // 必填 — 每轮对话注入
-  sessionStart?: string;  // 会话开始时注入
-  compaction?: string;    // 上下文压缩前注入
-  sessionEnd?: string;    // 会话结束时注入
-});
-```
-
-#### `hooks.beforeToolCall(config)`
-
-工具调用前拦截——可阻断或修改参数。
-
-```typescript
-hooks.beforeToolCall({
-  match?: RegExp | string;  // 工具名匹配（正则或字符串，省略匹配全部）
-  handler: (ctx: ToolCallContext) => ToolCallInterceptResult | void;
-});
-```
-
-#### `hooks.afterToolCall(config)`
-
-工具调用后观测——只读，无法修改。
-
-```typescript
-hooks.afterToolCall({
-  match?: RegExp | string;
-  handler: (ctx: ToolCallObserveContext) => void;
-});
-```
-
-#### `hooks.onSession(config)`
-
-会话生命周期回调。
-
-```typescript
-hooks.onSession({
-  start?: (ctx: SessionContext) => void;
-  end?: (ctx: SessionContext) => void;
-});
-```
-
-#### `hooks.onPermission(config)`
-
-权限决策拦截。
-
-```typescript
-hooks.onPermission({
-  match?: RegExp | string;
-  handler: (ctx: PermissionContext) => 'allow' | 'deny' | 'ask';
-});
-```
-
-#### `hooks.raw(registration)`
-
-绕过 Intent 层，直接写入 agent 原生 hook 代码。当 raw 与 Intent 冲突时，raw 胜出并输出 warning。
-
-```typescript
-hooks.raw({
-  agent: 'claude-code',
-  hookName: 'Notification',
-  handler: '#!/bin/bash\ncurl -X POST https://webhook.example.com',
-});
-```
-
-#### `hooks.extend(registration)`
-
-在 Intent 生成的 hook 之后追加逻辑。不替换，只补充。
-
-```typescript
-hooks.extend({
-  agent: 'opencode',
-  hookName: 'tool.execute.after',
-  handler: 'console.log("Tool execution completed");',
-});
-```
+详细的 API 说明、示例、三层优先级机制和降级行为，请参阅 **[Hook 使用指南](docs/hook-usage.md)**。各 agent 原生 hook 能力的完整横向对比，请参阅 **[Hook 横向对比](docs/hooks-comparison.md)**。
 
 ### Kit 方法详情
 
@@ -311,7 +225,7 @@ const warnings = checkDegradation('opencode', 'beforeToolCall');
 isIntentFullyUnsupported('openclaw', 'onPermission'); // true
 ```
 
-## Types
+## 类型
 
 ```typescript
 type AgentType = 'opencode' | 'claude-code' | 'openclaw' | 'codex';
@@ -358,7 +272,7 @@ interface SkippedIntent {
 type SupportLevel = 'supported' | 'partial' | 'unsupported';
 ```
 
-## Supported Agents
+## 支持的 Agent
 
 | Agent       | 检测方式                | Prompt 目标文件 | Hook 形式                  |
 | ----------- | ----------------------- | --------------- | -------------------------- |
@@ -367,7 +281,9 @@ type SupportLevel = 'supported' | 'partial' | 'unsupported';
 | OpenClaw    | `.openclaw/`            | manifest        | `HOOK.md` + `handler.ts`   |
 | Codex       | `.codex/`               | `AGENTS.md`     | Shell 脚本 + settings.json |
 
-## Development
+> 各 agent 的完整 hook 能力横向对比，请参阅 [docs/hooks-comparison.md](docs/hooks-comparison.md)。
+
+## 开发
 
 ```bash
 git clone git@github.com:nousyn/agent-kit.git
@@ -377,25 +293,25 @@ npm run build
 npm test
 ```
 
-### Scripts
+### 脚本
 
-| Command                | Description                  |
-| ---------------------- | ---------------------------- |
-| `npm run build`        | Compile TypeScript           |
-| `npm run dev`          | Watch mode compilation       |
-| `npm test`             | Run tests (Vitest)           |
-| `npm run test:watch`   | Watch mode tests             |
-| `npm run prettier:fix` | Format all files             |
-| `npm run release`      | Interactive release workflow |
+| 命令                   | 说明               |
+| ---------------------- | ------------------ |
+| `npm run build`        | 编译 TypeScript    |
+| `npm run dev`          | 监听模式编译       |
+| `npm test`             | 运行测试（Vitest） |
+| `npm run test:watch`   | 监听模式测试       |
+| `npm run prettier:fix` | 格式化所有文件     |
+| `npm run release`      | 交互式发布流程     |
 
-### Release
+### 发布
 
 ```bash
 npm run release
 ```
 
-Interactive script that walks through: git check → branch check → version selection → format → test → build → publish → push.
+交互式脚本，依次执行：git 检查 → 分支检查 → 版本选择 → 格式化 → 测试 → 构建 → 发布 → 推送。
 
-## License
+## 许可证
 
 MIT
