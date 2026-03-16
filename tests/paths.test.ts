@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectProjectRoot } from '../src/platform.js';
+import { detectProjectRoot } from '../src/paths.js';
 
 describe('detectProjectRoot', () => {
     it('返回有效路径', async () => {

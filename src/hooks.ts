@@ -1,9 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { AGENT_REGISTRY } from './types.js';
+import { resolveAgentPaths } from './paths.js';
 import type { AgentType, HookDefinition, HookInstallResult, HookSet } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -29,9 +28,8 @@ export async function installHooks(
     agent: AgentType,
     hookSets: HookSet | HookSet[],
 ): Promise<HookInstallResult> {
-    const home = os.homedir();
-    const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, name);
+    const paths = resolveAgentPaths(agent, name);
+    const hookDir = paths.hookDir!;
 
     const result: HookInstallResult = {
         success: false,
@@ -94,12 +92,11 @@ export async function installHooks(
         }
 
         // Merge settings.json for Claude Code / Codex
-        if (entry.getSettingsPath) {
-            const settingsPath = entry.getSettingsPath(home);
+        if (paths.settingsFile) {
             const shellFiles = Object.keys(files).filter((f) => f.endsWith('.sh'));
 
             if (shellFiles.length > 0) {
-                await mergeHookSettings(settingsPath, hookDir, shellFiles, allDefs, name);
+                await mergeHookSettings(paths.settingsFile, hookDir, shellFiles, allDefs, name);
                 result.settingsUpdated = true;
             }
         }
@@ -138,9 +135,8 @@ export async function uninstallHooks(
     name: string,
     agent: AgentType,
 ): Promise<{ success: boolean; removed: string[]; error?: string }> {
-    const home = os.homedir();
-    const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, name);
+    const paths = resolveAgentPaths(agent, name);
+    const hookDir = paths.hookDir!;
 
     const removed: string[] = [];
 
@@ -159,9 +155,8 @@ export async function uninstallHooks(
         }
 
         // Clean settings.json for Claude Code / Codex
-        if (entry.getSettingsPath) {
-            const settingsPath = entry.getSettingsPath(home);
-            await cleanHookSettings(settingsPath, name);
+        if (paths.settingsFile) {
+            await cleanHookSettings(paths.settingsFile, name);
         }
 
         // Deactivate for OpenClaw
@@ -189,9 +184,8 @@ export async function uninstallHooks(
  * @internal — called by the Kit object returned from createKit().
  */
 export async function hasHooksInstalled(name: string, agent: AgentType): Promise<boolean> {
-    const home = os.homedir();
-    const entry = AGENT_REGISTRY[agent];
-    const hookDir = entry.getHookDir(home, name);
+    const paths = resolveAgentPaths(agent, name);
+    const hookDir = paths.hookDir!;
 
     try {
         const files = await fs.readdir(hookDir);

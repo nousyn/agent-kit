@@ -62,6 +62,9 @@ export interface Kit {
 
     /** Get platform-appropriate data directory path. */
     getDataDir(options?: ScopeOptions): string;
+
+    /** Resolve all relevant paths (config file, hook dir, settings file) for an agent. */
+    resolvePaths(agent: AgentType, options?: ScopeOptions): AgentPaths;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +222,32 @@ export interface AgentRegistryEntry {
     getSettingsPath?: (home: string) => string;
     /** File paths to check for agent detection */
     detectionPaths: (cwd: string, home: string) => string[];
+}
+
+/**
+ * Resolved paths for an agent at a given scope.
+ *
+ * Returned by `kit.resolvePaths()` and `resolveAgentPaths()`.
+ */
+export interface AgentPaths {
+    /** Absolute path to the agent config file (e.g. AGENTS.md, CLAUDE.md). */
+    configFile: string;
+    /** Absolute path to the hook directory. Only present when `toolName` is provided (or via kit.resolvePaths). */
+    hookDir?: string;
+    /** Absolute path to the agent settings file (e.g. settings.json). Only present for agents that use one (claude-code, codex). */
+    settingsFile?: string;
+}
+
+/**
+ * Options for the standalone `resolveAgentPaths()` function.
+ */
+export interface ResolveAgentPathsOptions {
+    /** Storage scope. Defaults to 'global'. */
+    scope?: StorageScope;
+    /** Required when scope is 'project'. */
+    projectRoot?: string;
+    /** Tool/kit name. Required to resolve hookDir. */
+    toolName?: string;
 }
 
 /**

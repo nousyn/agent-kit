@@ -1,7 +1,7 @@
 import type { AgentType, Kit, KitOptions, ResolvedKitConfig, ScopeOptions, HookSet } from './types.js';
 import { injectPrompt, hasPromptInjected } from './prompt.js';
 import { installHooks, uninstallHooks, hasHooksInstalled } from './hooks.js';
-import { getDataDir } from './platform.js';
+import { getDataDir, resolveAgentPaths } from './paths.js';
 
 /**
  * Create a kit instance bound to the given tool name.
@@ -58,6 +58,10 @@ export function createKit(name: string, options?: KitOptions): Kit {
 
         getDataDir(scopeOptions?: ScopeOptions) {
             return getDataDir(config, scopeOptions);
+        },
+
+        resolvePaths(agent: AgentType, scopeOptions?: ScopeOptions) {
+            return resolveAgentPaths(agent, name, scopeOptions);
         },
     };
 }

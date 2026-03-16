@@ -93,14 +93,15 @@ createKit(name: string, options?: KitOptions): Kit
 
 返回的 Kit 对象包含以下方法：
 
-| 方法                                    | 说明                                |
-| --------------------------------------- | ----------------------------------- |
-| `injectPrompt(agent, prompt, options?)` | 注入 prompt 到 agent 配置文件       |
-| `hasPromptInjected(agent, options?)`    | 检查 prompt 是否已注入              |
-| `installHooks(agent, hooks)`            | 安装 hooks（传入 defineHooks 声明） |
-| `uninstallHooks(agent)`                 | 卸载 hooks                          |
-| `hasHooksInstalled(agent)`              | 检查 hooks 是否已安装               |
-| `getDataDir(options?)`                  | 获取跨平台数据目录路径              |
+| 方法                                    | 说明                                                      |
+| --------------------------------------- | --------------------------------------------------------- |
+| `injectPrompt(agent, prompt, options?)` | 注入 prompt 到 agent 配置文件                             |
+| `hasPromptInjected(agent, options?)`    | 检查 prompt 是否已注入                                    |
+| `installHooks(agent, hooks)`            | 安装 hooks（传入 defineHooks 声明）                       |
+| `uninstallHooks(agent)`                 | 卸载 hooks                                                |
+| `hasHooksInstalled(agent)`              | 检查 hooks 是否已安装                                     |
+| `getDataDir(options?)`                  | 获取跨平台数据目录路径                                    |
+| `resolvePaths(agent, options?)`         | 解析 agent 相关路径（配置文件、hook 目录、settings 文件） |
 
 ### Kit 方法详情
 
@@ -165,6 +166,45 @@ getDataDir(options?: ScopeOptions): string
 | `project`        | `{projectRoot}/.{name}`                                                                                      |
 
 全局路径可通过环境变量覆盖（默认变量名：`{NAME}_DATA_DIR`）。
+
+#### `kit.resolvePaths(agent, options?)`
+
+解析指定 agent 的所有相关路径。自动使用 kit 的 `name` 作为 toolName，使用侧无需关心。
+
+```typescript
+resolvePaths(agent: AgentType, options?: ScopeOptions): AgentPaths
+```
+
+返回值：
+
+```typescript
+interface AgentPaths {
+  configFile: string; // agent 配置文件路径（始终返回）
+  hookDir?: string; // hook 目录路径（始终返回，因为 kit 已绑定 toolName）
+  settingsFile?: string; // settings.json 路径（仅 claude-code / codex）
+}
+```
+
+示例：
+
+```typescript
+const kit = createKit('mnemo');
+
+// Global scope
+const paths = kit.resolvePaths('claude-code');
+// → {
+//     configFile: '~/.claude/CLAUDE.md',
+//     hookDir: '~/.claude/hooks/mnemo',
+//     settingsFile: '~/.claude/settings.json',
+//   }
+
+// Project scope
+const paths = kit.resolvePaths('opencode', { scope: 'project', projectRoot: '/my/project' });
+// → {
+//     configFile: '/my/project/AGENTS.md',
+//     hookDir: '~/.config/opencode/plugins',
+//   }
+```
 
 ### Hook 系统
 
@@ -273,6 +313,14 @@ interface Kit {
   uninstallHooks(agent: AgentType): Promise<{ success: boolean; removed: string[]; error?: string }>;
   hasHooksInstalled(agent: AgentType): Promise<boolean>;
   getDataDir(options?: ScopeOptions): string;
+  resolvePaths(agent: AgentType, options?: ScopeOptions): AgentPaths;
+}
+
+// Agent 路径
+interface AgentPaths {
+  configFile: string;
+  hookDir?: string;
+  settingsFile?: string;
 }
 
 // Hook 定义

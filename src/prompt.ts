@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { AGENT_REGISTRY } from './types.js';
+import { resolveAgentPaths } from './paths.js';
 import type { AgentType, ScopeOptions } from './types.js';
 
 /**
@@ -18,12 +17,12 @@ export async function injectPrompt(
     agent: AgentType,
     options?: ScopeOptions,
 ): Promise<void> {
-    const targetPath = resolveConfigPath(agent, options);
+    const { configFile } = resolveAgentPaths(agent, undefined, options);
 
     // Read existing content
     let existingContent = '';
     try {
-        existingContent = await fs.readFile(targetPath, 'utf-8');
+        existingContent = await fs.readFile(configFile, 'utf-8');
     } catch {
         // File doesn't exist yet
     }
@@ -31,8 +30,8 @@ export async function injectPrompt(
     const updated = applyPromptInjection(existingContent, name, prompt);
 
     // Ensure parent directory exists
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, updated, 'utf-8');
+    await fs.mkdir(path.dirname(configFile), { recursive: true });
+    await fs.writeFile(configFile, updated, 'utf-8');
 }
 
 /**
@@ -41,10 +40,10 @@ export async function injectPrompt(
  * @internal — called by the Kit object returned from createKit().
  */
 export async function hasPromptInjected(name: string, agent: AgentType, options?: ScopeOptions): Promise<boolean> {
-    const targetPath = resolveConfigPath(agent, options);
+    const { configFile } = resolveAgentPaths(agent, undefined, options);
 
     try {
-        const content = await fs.readFile(targetPath, 'utf-8');
+        const content = await fs.readFile(configFile, 'utf-8');
         return content.includes(markerStart(name));
     } catch {
         return false;
@@ -91,16 +90,6 @@ export function applyPromptInjection(existingContent: string, name: string, prom
  * Resolve the target config file path for an agent + scope.
  */
 export function resolveConfigPath(agent: AgentType, options?: ScopeOptions): string {
-    const entry = AGENT_REGISTRY[agent];
-    const scope = options?.scope ?? 'global';
-    const home = os.homedir();
-
-    if (scope === 'project') {
-        if (!options?.projectRoot) {
-            throw new Error('injectPrompt: projectRoot is required when scope is "project".');
-        }
-        return entry.projectConfigPath(options.projectRoot);
-    }
-
-    return entry.globalConfigPath(home);
+    const { configFile } = resolveAgentPaths(agent, undefined, options);
+    return configFile;
 }

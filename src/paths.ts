@@ -3,7 +3,8 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ResolvedKitConfig, ScopeOptions } from './types.js';
+import { AGENT_REGISTRY } from './types.js';
+import type { AgentType, AgentPaths, ResolvedKitConfig, ScopeOptions } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -83,4 +84,49 @@ export async function detectProjectRoot(cwd?: string): Promise<string> {
     }
 
     return path.resolve(startDir);
+}
+
+// ---------------------------------------------------------------------------
+// Agent path resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve all relevant paths for an agent at a given scope.
+ *
+ * Central path resolution for agent config files, hook directories, and
+ * settings files. All other modules should use this function instead of
+ * reading from AGENT_REGISTRY directly.
+ *
+ * @param agent - Target agent type.
+ * @param toolName - Tool/kit name. When provided, hookDir is included in the result.
+ * @param options - Scope options (global/project).
+ *
+ * @internal — used by prompt.ts, hooks.ts, and create-kit.ts.
+ */
+export function resolveAgentPaths(agent: AgentType, toolName?: string, options?: ScopeOptions): AgentPaths {
+    const entry = AGENT_REGISTRY[agent];
+    const scope = options?.scope ?? 'global';
+    const home = os.homedir();
+
+    let configFile: string;
+    if (scope === 'project') {
+        if (!options?.projectRoot) {
+            throw new Error('resolveAgentPaths: projectRoot is required when scope is "project".');
+        }
+        configFile = entry.projectConfigPath(options.projectRoot);
+    } else {
+        configFile = entry.globalConfigPath(home);
+    }
+
+    const result: AgentPaths = { configFile };
+
+    if (toolName) {
+        result.hookDir = entry.getHookDir(home, toolName);
+    }
+
+    if (entry.getSettingsPath) {
+        result.settingsFile = entry.getSettingsPath(home);
+    }
+
+    return result;
 }

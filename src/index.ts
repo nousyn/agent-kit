@@ -23,11 +23,12 @@ export type {
     OpenClawInternalEvent,
     OpenClawEvent,
     AgentEventMap,
+    AgentPaths,
 } from './types.js';
 export { AGENT_TYPES, CLIENT_NAME_MAP } from './types.js';
 
-// Platform (only detectProjectRoot is standalone; getDataDir is on Kit)
-export { detectProjectRoot } from './platform.js';
+// Paths (only detectProjectRoot is standalone; getDataDir & resolvePaths are on Kit)
+export { detectProjectRoot } from './paths.js';
 
 // Detection
 export { detectAgent, detectAgentFromClient } from './detect.js';
