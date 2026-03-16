@@ -1,6 +1,9 @@
 // Core factory
 export { createKit } from './create-kit.js';
 
+// Prompt utilities
+export { resolveConfigPath } from './prompt.js';
+
 // Hook definition
 export { defineHooks, getValidEvents } from './define-hooks.js';
 

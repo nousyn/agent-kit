@@ -90,7 +90,7 @@ export function applyPromptInjection(existingContent: string, name: string, prom
 /**
  * Resolve the target config file path for an agent + scope.
  */
-function resolveConfigPath(agent: AgentType, options?: ScopeOptions): string {
+export function resolveConfigPath(agent: AgentType, options?: ScopeOptions): string {
     const entry = AGENT_REGISTRY[agent];
     const scope = options?.scope ?? 'global';
     const home = os.homedir();
