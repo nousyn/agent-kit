@@ -85,11 +85,3 @@ export function applyPromptInjection(existingContent: string, name: string, prom
     const separator = existingContent.trim() ? '\n\n' : '';
     return existingContent.trimEnd() + separator + block + '\n';
 }
-
-/**
- * Resolve the target config file path for an agent + scope.
- */
-export function resolveConfigPath(agent: AgentType, options?: ScopeOptions): string {
-    const { configFile } = resolveAgentPaths(agent, undefined, options);
-    return configFile;
-}

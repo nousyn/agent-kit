@@ -1,9 +1,6 @@
 // Core factory
 export { createKit } from './create-kit.js';
 
-// Prompt utilities
-export { resolveConfigPath } from './prompt.js';
-
 // Hook definition
 export { defineHooks, getValidEvents } from './define-hooks.js';
 
@@ -19,13 +16,11 @@ export type {
     HookSet,
     ClaudeCodeEvent,
     OpenCodeEvent,
-    OpenClawPluginEvent,
-    OpenClawInternalEvent,
     OpenClawEvent,
     AgentEventMap,
     AgentPaths,
 } from './types.js';
-export { AGENT_TYPES, CLIENT_NAME_MAP } from './types.js';
+export { AGENT_TYPES } from './types.js';
 
 // Paths (only detectProjectRoot is standalone; getDataDir & resolvePaths are on Kit)
 export { detectProjectRoot } from './paths.js';
